@@ -1,0 +1,2 @@
+Ce dossier recevra la police JSON (font.typeface.json) à l'étape des cartes 3D (TextGeometry).
+Il n'est pas utilisé à l'étape 1.
