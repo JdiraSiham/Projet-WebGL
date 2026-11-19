@@ -1,9 +1,15 @@
 import * as THREE from 'three';
 import { QuizCard } from '../cards/QuizCard.js';
 import { ChallengeCard } from '../cards/ChallengeCard.js';
-import { CRYSTAL_LENGTH, FINAL_LENGTH, makeCrystalSequence, makeSymbolPuzzle } from '../data/challenges.js';
+import { PuzzleCard } from '../cards/PuzzleCard.js';
+import { MemoryCard } from '../cards/MemoryCard.js';
+import {
+  CRYSTAL_LENGTH, FINAL_LENGTH, makeCrystalSequence, makeSymbolPuzzle,
+  makeSlidePuzzle, makeMemoryDeck, MemoryGame, pickChallengeKind
+} from '../data/challenges.js';
+import { MEMORY_ERROR_POINTS } from './RuleEngine.js';
 import { CARD_SIZE } from '../cards/Card3D.js';
-import { easeOutCubic, easeInOutQuad, easeOutBack } from './AnimationManager.js';
+import { easeOutCubic, easeInOutQuad, easeOutBack, easeLinear } from './AnimationManager.js';
 
 const DISPLAY_FOCUS = new THREE.Vector3(0, 3, 0); // le centre du plateau
 const SCREEN_FRACTION = 0.68;                     // la carte occupe ~68 % de la hauteur de l'écran
@@ -94,8 +100,10 @@ export class EventManager {
   }
 
 
-  // Défi (cases défi, ou finale si final = true). Le type est tiré au hasard entre Cristaux et Symboles
-  // (la finale est toujours une épreuve de 5 cristaux). La caméra est figée tant que la carte est affichée.
+  // Défi (cases défi, ou finale si final = true). Le type est tiré au hasard entre 3 jeux :
+  // classique (Cristaux ou Symboles), Puzzle chronométré, Mémoire (la finale est toujours une épreuve de 5 cristaux).
+  // `kind` permet de forcer un type : 'crystals', 'symbols', 'puzzle' ou 'memory'.
+  // La caméra est figée tant que la carte est affichée.
   async openChallenge(playerState, { level, final = false, kind = null }) {
     this.cameraManager.setLocked(true);
     try {
@@ -106,44 +114,61 @@ export class EventManager {
   }
 
   async runChallenge(playerState, { level, final, kind }) {
-    const chosen = final ? 'crystals' : (kind || (Math.random() < 0.5 ? 'crystals' : 'symbols'));
-    const card = new ChallengeCard(this.textFactory);
-    this.card = card;
-
+    const chosen = final ? 'crystals' : (kind || pickChallengeKind());
+    let card;
     let sequence = null;
     let puzzle = null;
+    let slide = null;
+    let deck = null;
     if (chosen === 'crystals') {
+      card = new ChallengeCard(this.textFactory);
       sequence = makeCrystalSequence(final ? FINAL_LENGTH : CRYSTAL_LENGTH[level]);
       card.showCrystals(sequence.length, { final });
-    } else {
+    } else if (chosen === 'symbols') {
+      card = new ChallengeCard(this.textFactory);
       puzzle = makeSymbolPuzzle(level);
       card.showSymbols(puzzle);
+    } else if (chosen === 'puzzle') {
+      card = new PuzzleCard(this.textFactory, this.animations);
+      slide = makeSlidePuzzle(level);
+      card.showPuzzle(slide);
+    } else {
+      card = new MemoryCard(this.textFactory, this.animations);
+      deck = makeMemoryDeck(level);
+      card.showMemory(deck);
     }
-    this.activeEvent = { type: 'challenge', kind: chosen, final, sequence, puzzle, step: 0 };
+    this.card = card;
+    this.activeEvent = { type: 'challenge', kind: chosen, final, sequence, puzzle, slide, deck, step: 0 };
     this.scene.add(card.group);
 
     const pile = this.board.piles.find((p) => p.key === 'defi');
     await this.playEntry(card, pile);
 
     let success;
+    let extra = {}; // informations en plus pour l'affichage du résultat (erreurs du jeu de mémoire...)
     if (chosen === 'crystals') {
       success = await this.playCrystals(card, sequence);
-    } else {
+    } else if (chosen === 'symbols') {
       const index = await this.waitAnswer();
       success = card.submitSymbol(index);
+    } else if (chosen === 'puzzle') {
+      success = await this.playPuzzle(card, slide);
+    } else {
+      extra = await this.playMemory(card, deck, playerState);
+      success = true; // le jeu de mémoire se termine toujours par la réussite : seules les erreurs coûtent des points
     }
 
     const outcome = final
       ? this.rules.resolveFinal(playerState, success)
       : this.rules.resolveChallenge(playerState, success);
-    card.showFeedback(this.challengeText(outcome, final), success);
+    card.showFeedback(this.challengeText({ ...outcome, ...extra, kind: chosen }, final), success);
     await this.animations.wait(FEEDBACK_SECONDS);
 
     await this.playExit(card, pile);
     card.dispose();
     this.card = null;
     this.activeEvent = null;
-    return { kind: chosen, final, ...outcome };
+    return { kind: chosen, final, ...outcome, ...extra };
   }
 
   // Cristaux : les cristaux s'allument un par un, puis le joueur clique dans le même ordre.
@@ -171,9 +196,83 @@ export class EventManager {
     return true;
   }
 
-  challengeText({ success, applied, score, lives }, final) {
+  // Puzzle : le temps s'écoule (barre + secondes) ; le joueur doit remettre les tuiles dans l'ordre avant la fin.
+  // Le chrono utilise l'AnimationManager : il avance avec le reste du jeu (et ne continue pas si le jeu est en pause).
+  // Retourne true si le puzzle est résolu à temps, false si le temps est écoulé.
+  async playPuzzle(card, slide) {
+    const run = { over: false };
+
+    const timeUp = this.animations.animate(slide.time, (eased, t) => {
+      if (!run.over) card.setTime(slide.time * (1 - t), slide.time);
+    }, easeLinear).then(() => false);
+
+    const solved = this.waitPuzzleSolved(card, run);
+
+    const success = await Promise.race([timeUp, solved]); // le premier des deux qui se termine
+    run.over = true;
+    this.pendingAnswer = null; // plus aucun clic attendu
+    card.lock();
+    if (success) card.markSolved();
+    return success;
+  }
+
+  // Enchaîne les clics sur les tuiles jusqu'à ce que le puzzle soit résolu (ou que le temps soit écoulé)
+  async waitPuzzleSolved(card, run) {
+    while (!run.over) {
+      const id = await this.waitAnswer();
+      const result = await card.slideTile(id);
+      if (result.solved) return true;
+    }
+    return false;
+  }
+
+  // Mémoire : le joueur retourne deux cartes à la fois. Une erreur retire des points TOUT DE SUITE
+  // (le score ne passe jamais sous 0). L'épreuve se termine quand toutes les paires sont trouvées.
+  // Retourne { errors, penalty } (penalty = points réellement perdus).
+  async playMemory(card, deck, playerState) {
+    const game = new MemoryGame(deck);
+    let penalty = 0;
+    card.setStatus(`Trouve les paires !\nChaque erreur : -${MEMORY_ERROR_POINTS} points`);
+
+    while (!game.done) {
+      this.activeEvent.step = game.pairsFound;
+      const index = await this.waitAnswer();
+      const result = game.flip(index);
+      if (result.type === 'ignore') continue;
+
+      await card.flipTile(index, true);
+      if (result.type === 'first') continue;
+
+      if (result.type === 'match') {
+        card.markMatched(result.a, result.b);
+        card.setProgress(game.pairsFound, deck.length / 2);
+        continue;
+      }
+
+      // Erreur : points perdus, on laisse voir les deux cartes puis on les recache
+      const mistake = this.rules.resolveMemoryError(playerState);
+      penalty -= mistake.applied;
+      card.setStatus(`Erreur ! -${MEMORY_ERROR_POINTS} points\nScore : ${mistake.score}`);
+      await this.animations.wait(0.8);
+      await Promise.all([card.flipTile(result.a, false), card.flipTile(result.b, false)]);
+    }
+    card.setStatus('Toutes les paires\nsont trouvées !');
+    return { errors: game.errors, penalty };
+  }
+
+  challengeText({ success, applied, score, lives, kind, errors, penalty }, final) {
     const name = final ? 'Finale' : 'Défi';
-    if (success) return `${name} réussi${final ? 'e' : ''} ! +${applied} points\nScore : ${score}`;
+    if (success) {
+      const lines = [`${name} réussi${final ? 'e' : ''} ! +${applied} points`];
+      if (kind === 'memory') lines.push(`Erreurs : ${errors} (-${penalty} points)`);
+      lines.push(`Score : ${score}`);
+      return lines.join('\n');
+    }
+    if (kind === 'puzzle') {
+      return lives === 0
+        ? 'Temps écoulé ! -1 vie\nPlus aucune vie : éliminé'
+        : `Temps écoulé ! -1 vie\nVies restantes : ${lives}`;
+    }
     if (lives === 0) return `${name} raté${final ? 'e' : ''} ! -1 vie\nPlus aucune vie : éliminé`;
     return final
       ? `Finale ratée ! -1 vie\nVies : ${lives} - tu retentes au prochain tour`

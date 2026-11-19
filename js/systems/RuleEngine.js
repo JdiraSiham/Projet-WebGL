@@ -5,6 +5,7 @@ export const QUIZ_CORRECT_POINTS = 100;
 export const QUIZ_WRONG_POINTS = -25;
 export const CHALLENGE_POINTS = 150;
 export const FINAL_POINTS = 250;
+export const MEMORY_ERROR_POINTS = 15; // jeu de mémoire : points perdus à chaque erreur
 
 export class RuleEngine {
   // Quel événement déclenche la case d'arrivée ? (null = aucun événement géré pour l'instant)
@@ -35,6 +36,13 @@ export class RuleEngine {
     if (success) playerState.addScore(CHALLENGE_POINTS);
     else playerState.loseLife(1);
     return this.buildOutcome(playerState, success, success ? CHALLENGE_POINTS : 0, before);
+  }
+
+  // Jeu de mémoire : chaque erreur retire des points tout de suite (le score ne passe jamais sous 0)
+  resolveMemoryError(playerState) {
+    const before = playerState.score;
+    playerState.addScore(-MEMORY_ERROR_POINTS);
+    return { applied: playerState.score - before, score: playerState.score };
   }
 
   // Finale : réussite +250 points (le jeu enregistre alors l'arrivée) ;

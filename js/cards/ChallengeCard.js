@@ -57,7 +57,7 @@ function getShapeGeometry(kind) {
 }
 
 // Forme 3D (cercle, carré, triangle, étoile ou losange) de la taille demandée
-function shapeMesh(kind, size) {
+export function shapeMesh(kind, size) {
   const mesh = new THREE.Mesh(getShapeGeometry(kind), getStandard(SHAPE_COLORS[kind], { roughness: 0.4 }));
   mesh.scale.set(size, size, 1);
   return mesh;
