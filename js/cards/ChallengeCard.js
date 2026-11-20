@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Card3D } from './Card3D.js';
 import { makeBox, getStandard } from '../world/Materials.js';
+import { shapeMesh } from './Shapes3D.js';
 
 const VIOLET = 0x8a4fd8;
 const COLORS = {
@@ -17,7 +18,6 @@ const COLORS = {
 
 const CRYSTAL_COLORS = [0xe53935, 0x1e88e5, 0x43a047, 0xfdd835];
 const CRYSTAL_POSITIONS = [[-0.55, 0.3], [0.55, 0.3], [-0.55, -0.65], [0.55, -0.65]];
-const SHAPE_COLORS = { cercle: 0xffd54a, carre: 0x4dd0e1, triangle: 0xff7043, etoile: 0xffffff, losange: 0x9ccc65 };
 const LABEL_Y = 1.36;
 const STATUS_Y = 0.95;
 
@@ -25,43 +25,6 @@ const STATUS_Y = 0.95;
 const crystalGeometry = new THREE.OctahedronGeometry(0.27);
 const baseGeometry = new THREE.CylinderGeometry(0.33, 0.37, 0.06, 24);
 const dotGeometry = new THREE.SphereGeometry(0.07, 12, 12);
-const shapeGeometries = {};
-
-function getShapeGeometry(kind) {
-  if (!shapeGeometries[kind]) {
-    const shape = new THREE.Shape();
-    const polygon = (points) => {
-      points.forEach(([x, y], i) => (i === 0 ? shape.moveTo(x, y) : shape.lineTo(x, y)));
-      shape.closePath();
-    };
-    switch (kind) {
-      case 'cercle': shape.absarc(0, 0, 0.45, 0, Math.PI * 2, false); break;
-      case 'carre': polygon([[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]]); break;
-      case 'triangle': polygon([[0, 0.5], [-0.5, -0.4], [0.5, -0.4]]); break;
-      case 'losange': polygon([[0, 0.55], [0.4, 0], [0, -0.55], [-0.4, 0]]); break;
-      default: { // étoile à 5 branches
-        const points = [];
-        for (let i = 0; i < 10; i++) {
-          const r = i % 2 === 0 ? 0.5 : 0.22;
-          const a = Math.PI / 2 + (i * Math.PI) / 5;
-          points.push([Math.cos(a) * r, Math.sin(a) * r]);
-        }
-        polygon(points);
-      }
-    }
-    shapeGeometries[kind] = new THREE.ExtrudeGeometry(shape, {
-      depth: 0.05, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 1, curveSegments: 16
-    });
-  }
-  return shapeGeometries[kind];
-}
-
-// Forme 3D (cercle, carré, triangle, étoile ou losange) de la taille demandée
-function shapeMesh(kind, size) {
-  const mesh = new THREE.Mesh(getShapeGeometry(kind), getStandard(SHAPE_COLORS[kind], { roughness: 0.4 }));
-  mesh.scale.set(size, size, 1);
-  return mesh;
-}
 
 // Carte de défi violette. Le recto montre la pièce de puzzle ; le verso porte l'épreuve :
 // des cristaux à mémoriser (kind 'crystals') ou une suite de symboles à compléter (kind 'symbols').
@@ -81,6 +44,7 @@ export class ChallengeCard extends Card3D {
     this.status = null;
     this.progress = null;
     this.banner = null;
+    this.component = null; // jeu monté sur la carte (puzzle coulissant, mémoire)
     this.setFlip(0);
   }
 
@@ -101,6 +65,17 @@ export class ChallengeCard extends Card3D {
     });
     this.status.position.y = STATUS_Y;
     this.backContent.add(this.status);
+  }
+
+  // ----- Jeux montés (puzzle coulissant, mémoire) -----
+
+  // Place un composant 3D (avec group, clickableMeshes, setHover) sur le verso de la carte
+  mountGame(component, kind, title) {
+    this.kind = kind;
+    this.component = component;
+    this.setTitle(title);
+    this.backContent.add(component.group);
+    this.clickableMeshes = component.clickableMeshes;
   }
 
   // ----- Défi Cristaux -----
@@ -237,7 +212,9 @@ export class ChallengeCard extends Card3D {
   setHover(index) {
     if (this.locked || index === this.hoveredIndex) return;
     this.hoveredIndex = index;
-    if (this.kind === 'crystals') {
+    if (this.component) {
+      this.component.setHover(index);
+    } else if (this.kind === 'crystals') {
       this.updateCrystalScales();
     } else if (this.kind === 'symbols') {
       this.choices.forEach((choice, i) => {
@@ -257,7 +234,7 @@ export class ChallengeCard extends Card3D {
     label.position.z = 0.04;
 
     this.banner = new THREE.Group();
-    this.banner.position.y = LABEL_Y;
+    this.banner.position.y = LABEL_Y - 0.03; // le bandeau (0,5 de haut) reste dans la face colorée
     this.banner.add(pill, label);
     this.backContent.add(this.banner);
   }

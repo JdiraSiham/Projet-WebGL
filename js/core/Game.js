@@ -162,7 +162,11 @@ export class Game {
       this.refreshActivePlayer();
     }
 
-    if (turn.isFinished) await this.endGame();
+    if (turn.isFinished) {
+      await this.endGame();
+      return;
+    }
+    await this.announceSkips();
   }
 
   // Événement de la case d'arrivée : quiz ou défi (le niveau = la zone de la case)
@@ -175,7 +179,31 @@ export class Game {
     } else if (event === 'challenge') {
       this.turnManager.startEvent();
       await this.events.openChallenge(player.state, { level: tile.zone });
+    } else if (event === 'bonus') {
+      this.turnManager.startEvent();
+      const outcome = await this.events.openBonus(player.state);
+      if (outcome.move) await this.applyMove(player, this.rules.bonusDestination(player.position));
+    } else if (event === 'trap') {
+      this.turnManager.startEvent();
+      const outcome = await this.events.openTrap(player.state);
+      if (outcome.move) await this.applyMove(player, this.rules.trapDestination(player.position, player.state.checkpoint));
     }
+  }
+
+  // Déplacement spécial (bonus ou piège) : le pion bouge, mais la case d'arrivée ne déclenche aucun nouvel événement
+  async applyMove(player, destination) {
+    if (destination === player.position) return;
+    this.turnManager.startMoving();
+    await player.moveTo(this.board, destination, this.animations, () => this.refreshOffsets());
+  }
+
+  // Tour passé à cause d'un piège : on l'annonce, puis le jeu reprend
+  async announceSkips() {
+    const skipped = this.turnManager.takeSkipped();
+    if (skipped.length === 0) return;
+    this.state.phase = PHASE.EVENT; // le dé reste bloqué pendant le message
+    for (const player of skipped) await this.events.showNotice(`${player.name} passe son tour`);
+    this.state.phase = PHASE.READY;
   }
 
   // Finale : 5 cristaux. Réussite = arrivée enregistrée ; échec = -1 vie et nouvelle tentative au prochain tour.

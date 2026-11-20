@@ -98,12 +98,13 @@ export class Player {
     }, easeInOutQuad);
   }
 
-  // Avance case par case jusqu'à l'indice cible (sens du parcours).
+  // Se déplace case par case jusqu'à l'indice cible : en avant (sens du parcours) ou en arrière (recul d'un piège).
   // onStep() est appelée à chaque saut : le jeu y recalcule les places des pions sur les cases.
   async moveTo(board, targetIndex, animations, onStep = () => {}) {
     this.moving = true;
-    while (this.position < targetIndex) {
-      this.position += 1;
+    const direction = Math.sign(targetIndex - this.position);
+    while (this.position !== targetIndex) {
+      this.position += direction;
       this.anchor.copy(board.getPosition(this.position));
       onStep(); // fixe targetOffsetX : seul au centre, ou à sa place si l'autre pion est là
       const destination = new THREE.Vector3(this.anchor.x + this.targetOffsetX, this.anchor.y, this.anchor.z);

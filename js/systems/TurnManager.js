@@ -5,6 +5,7 @@ import { PHASE } from '../core/GameState.js';
 export class TurnManager {
   constructor(state) {
     this.state = state;
+    this.skipped = []; // joueurs dont le tour vient d'être passé (pénalité d'un piège)
   }
 
   get currentPlayer() {
@@ -34,18 +35,38 @@ export class TurnManager {
   }
 
   // Passe au joueur suivant qui peut encore jouer (en solo : le même joueur).
+  // Un joueur qui doit « passer un tour » est sauté une fois : sa pénalité est alors consommée.
   // Si plus personne ne peut jouer, la partie est terminée.
   nextTurn() {
     const players = this.state.players;
     const count = players.length;
-    for (let i = 1; i <= count; i++) {
-      const index = (this.state.activePlayerIndex + i) % count;
-      if (players[index].canPlay) {
-        this.state.activePlayerIndex = index;
-        this.state.phase = PHASE.READY;
-        return;
-      }
+    this.skipped = [];
+
+    if (!players.some((p) => p.canPlay)) {
+      this.state.phase = PHASE.FINISHED;
+      return;
     }
-    this.state.phase = PHASE.FINISHED;
+
+    let index = this.state.activePlayerIndex;
+    for (let guard = 0; guard < count * 3; guard++) {
+      index = (index + 1) % count;
+      const player = players[index];
+      if (!player.canPlay) continue;
+      if (player.skipTurn) {
+        player.skipTurn = false;
+        this.skipped.push(player);
+        continue;
+      }
+      this.state.activePlayerIndex = index;
+      this.state.phase = PHASE.READY;
+      return;
+    }
+  }
+
+  // Retourne (et vide) la liste des joueurs dont le tour vient d'être passé
+  takeSkipped() {
+    const list = this.skipped;
+    this.skipped = [];
+    return list;
   }
 }
