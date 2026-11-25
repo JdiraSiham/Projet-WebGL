@@ -8,8 +8,8 @@ export class Menu3D {
     this.rulesCard = new RulesCard3D(events.textFactory);
   }
 
-  async chooseOnCard(mode) {
-    this.card.configure(mode);
+  async chooseOnCard(mode, title = null) {
+    this.card.configure(mode, true, title);
     await this.events.openMenuCard(this.card, this.rulesCard);
 
     menuLoop: for (;;) {
@@ -45,6 +45,11 @@ export class Menu3D {
   // Menu de départ : la carte quitte la scène après le choix du mode.
   async showMain() {
     return this.chooseOnCard('main');
+  }
+
+  // Fin de partie : même carte et mêmes choix que le menu principal, avec le résultat en titre.
+  async showEnd(title) {
+    return this.chooseOnCard('main', title);
   }
 
   // Pause : CONTINUER, SOLO, 2 JOUEURS et RÈGLES. Retourne 'resume', 'solo' ou 'duo'.

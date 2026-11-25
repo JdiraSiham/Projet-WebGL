@@ -73,7 +73,7 @@ export class TextFactory {
 
   // Crée un texte 3D centré horizontalement, dans le plan XY, face vers +Z.
   // anchor 'top' : le haut du texte est à y = 0 ; 'middle' : le milieu du bloc est à y = 0.
-  create(text, { size = 0.2, depth = 0.02, color = 0xffffff, maxWidth = Infinity, maxLines = Infinity, minSize = 0.04, anchor = 'middle' } = {}) {
+  create(text, { size = 0.2, depth = 0.02, color = 0xffffff, maxWidth = Infinity, maxLines = Infinity, minSize = 0.04, anchor = 'middle', align = 'center', lineHeightMultiplier = LINE_HEIGHT } = {}) {
     // On réduit la taille tant que le texte est trop large ou a trop de lignes
     let s = size;
     for (let i = 0; i < 16; i++) {
@@ -86,7 +86,7 @@ export class TextFactory {
     const lines = this.wrap(text, s, maxWidth);
     const material = getStandard(color, { roughness: 0.5 });
     const capHeight = s * CAP_HEIGHT;
-    const lineHeight = s * LINE_HEIGHT;
+    const lineHeight = s * lineHeightMultiplier;
     const totalHeight = capHeight + (lines.length - 1) * lineHeight;
     const firstBaseline = anchor === 'top' ? -capHeight : totalHeight / 2 - capHeight;
 
@@ -94,7 +94,8 @@ export class TextFactory {
     lines.forEach((line, i) => {
       if (line === '') return;
       const mesh = new THREE.Mesh(this.lineGeometry(line, s, depth), material);
-      mesh.position.set(-this.measure(line, s) / 2, firstBaseline - i * lineHeight, 0);
+      const x = align === 'left' ? 0 : -this.measure(line, s) / 2;
+      mesh.position.set(x, firstBaseline - i * lineHeight, 0);
       group.add(mesh);
     });
     group.userData.size = s;

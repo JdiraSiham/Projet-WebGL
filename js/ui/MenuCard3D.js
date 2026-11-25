@@ -94,7 +94,7 @@ export class MenuCard3D extends Card3D {
     return group;
   }
 
-  configure(mode, resetFlip = true) {
+  configure(mode, resetFlip = true, customTitle = null) {
     if (this.backInset) {
       this.backInset.panel.geometry.dispose();
       this.backInset.panel.material.dispose();
@@ -113,7 +113,7 @@ export class MenuCard3D extends Card3D {
     if (resetFlip) this.setFlip(0);
     this.escapeIndex = mode === 'pause' ? 0 : null;
 
-    const titleText = mode === 'pause' ? 'PAUSE' : 'MENU';
+    const titleText = customTitle || (mode === 'pause' ? 'PAUSE' : 'MENU');
     const title = this.makeLabel(titleText, {
       size: mode === 'pause' ? 0.29 : 0.2,
       maxWidth: 1.92,

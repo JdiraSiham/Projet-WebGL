@@ -560,10 +560,7 @@ export class EventManager {
   async completePendingCard(record) {
     if (!record) return;
     const card = record.card;
-    const startScale = card.group.scale.x;
-    await this.animations.animate(0.28, (eased) => {
-      card.group.scale.setScalar(Math.max(0.001, startScale * (1 - eased)));
-    }, easeInOutQuad);
+    await this.playExit(card, record.pile);
     card.dispose();
     this.presentingPendingCards.delete(record);
   }

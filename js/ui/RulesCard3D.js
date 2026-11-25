@@ -67,13 +67,10 @@ export class RulesCard3D extends Card3D {
     const title = this.makeLabel('RÈGLE', {
       size: 0.22, maxWidth: 1.4, color: CARD_VISUALS.text, depth: 0.02
     });
-    title.position.set(0, 1.22, 0.065);
+    title.position.set(0, 1.2, 0.065);
     this.backContent.add(title);
-    const divider = makeBox(0.68, 0.025, 0.015, CARD_VISUALS.gold, { radius: 0.01, roughness: 0.5 });
-    divider.position.set(0, 1.0, 0.065);
-    this.backContent.add(divider);
 
-    const text = this.textFactory.create([
+    const rules = [
       'But : réussir le défi de la case 30.',
       'Clique sur le dé pour avancer.',
       'Réussir = bonus.',
@@ -82,18 +79,36 @@ export class RulesCard3D extends Card3D {
       'Danger : recul, tour sauté, dé ÷2.',
       'Les portails téléportent le pion.',
       'Checkpoints : cases 10 et 20.',
-      'Solo : trois échecs finaux = défaite.',
-      'Échap : pause.'
-    ].join('\n'), {
-      size: 0.105, maxWidth: 1.72, maxLines: 10, minSize: 0.085,
-      color: CARD_VISUALS.text, depth: 0.015, anchor: 'top'
+      'Solo : trois échecs finaux = défaite.'
+    ];
+    const textWidth = 1.9;
+    const textLeft = -textWidth / 2;
+    const textSize = 0.085;
+    const ruleGap = 0.105;
+    const ruleTexts = rules.map((rule) => this.textFactory.create(rule, {
+      size: textSize,
+      maxWidth: textWidth,
+      maxLines: 1,
+      minSize: textSize,
+      color: CARD_VISUALS.text,
+      depth: 0.015,
+      anchor: 'top',
+      align: 'left'
+    }));
+    const contentHeight = ruleTexts.reduce((height, text) => height + text.userData.height, 0)
+      + ruleGap * (ruleTexts.length - 1);
+    const contentTop = 1.1375;
+    const contentBottom = -1.04;
+    let rowTop = contentTop - (contentTop - contentBottom - contentHeight) / 2;
+    ruleTexts.forEach((text, index) => {
+      text.position.set(textLeft, rowTop, 0.065);
+      this.backContent.add(text);
+      rowTop -= text.userData.height + (index < ruleTexts.length - 1 ? ruleGap : 0);
     });
-    text.position.set(0, 0.78, 0.065);
-    this.backContent.add(text);
 
     this.returnButton = new THREE.Group();
     this.returnButton.userData.answerIndex = 0;
-    this.returnButton.position.set(0, -1.25, 0.065);
+    this.returnButton.position.set(0, -1.17, 0.065);
     const shadow = makeRoundedSlab(1.55, 0.42, 0.035, CARD_VISUALS.woodShadow, { radius: 0.1, roughness: 0.75 });
     const edge = makeRoundedSlab(1.55, 0.42, 0.045, CARD_VISUALS.gold, { radius: 0.1, roughness: 0.55, metalness: 0.12 });
     const face = makeRoundedSlab(1.46, 0.33, 0.055, CARD_VISUALS.return, { radius: 0.08, roughness: 0.62 });

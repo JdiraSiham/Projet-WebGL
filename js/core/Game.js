@@ -14,7 +14,6 @@ import { QuestionBank } from '../systems/QuestionBank.js';
 import { EventManager } from '../systems/EventManager.js';
 import { TextFactory } from '../ui/TextFactory.js';
 import { Menu3D } from '../ui/Menu3D.js';
-import { EndScreen3D } from '../ui/EndScreen3D.js';
 import { QUESTIONS } from '../data/questions.js';
 
 const FONT_URL = 'assets/fonts/font.typeface.json';
@@ -81,7 +80,6 @@ export class Game {
       return this.togglePause();
     };
     this.events.onRulesCardClick = () => this.menu.showRulesFromHome();
-    this.endScreen = new EndScreen3D(this.events);
     this.openMainMenu().catch((error) => console.error(error));
   }
 
@@ -364,7 +362,9 @@ export class Game {
   // Fin de partie : on laisse voir la dernière animation, puis l'écran 3D propose de rejouer ou de revenir au menu
   async endGame() {
     await this.animations.wait(1.2);
-    const choice = await this.endScreen.show(this.state);
+    const winner = this.state.winner;
+    const title = winner ? `${winner.name || `Joueur ${winner.id}`} a gagné !` : 'Défaite !';
+    const choice = await this.menu.showEnd(title);
     this.startNewGame(choice === 'duo' ? MODE.DUO : MODE.SOLO);
   }
 
