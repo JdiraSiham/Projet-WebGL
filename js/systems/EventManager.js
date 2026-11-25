@@ -21,11 +21,12 @@ const LIFT_HEIGHT = 3.2;                          // hauteur de la levée au-des
 const FEEDBACK_SECONDS = 2;
 const HOME_CARD_MAX_SCALE = 1.15;
 const HOME_CARD_GAP = 0.55;
+const PAUSE_CARD_GAP = 0.32;
 
 // Ouvre et ferme les événements du plateau (quiz, défis, cartes bonus et danger).
-// Une seule carte peut être ouverte à la fois (activeEvent).
+// Une seule carte de jeu est active ; la carte Pause peut s'afficher à côté.
 export class EventManager {
-  constructor({ scene, cameraManager, textFactory, animations, input, board, rules, questions }) {
+  constructor({ scene, cameraManager, textFactory, animations, input, board, rules, questions, isGamePaused }) {
     this.lastChallengeKind = null; // dernier jeu de défi tiré
     this.scene = scene;
     this.cameraManager = cameraManager;
@@ -35,6 +36,7 @@ export class EventManager {
     this.input = input;
     this.rules = rules;
     this.questions = questions;
+    this.isGamePaused = isGamePaused;
 
     this.activeEvent = null;
     this.card = null;
@@ -51,10 +53,14 @@ export class EventManager {
     this.pendingCards = new Map();
     this.presentingPendingCards = new Set();
     this.cardHomeMetrics = new WeakMap();
+    this.pauseOverlay = null;
+    this.rulesOverlay = null;
+    this.eventCardOffset = null;
 
     // Objets cliquables de la carte ouverte (réponses, cristaux, tuiles, cartes mémoire...)
     input.addInteraction({
-      isActive: () => this.card !== null && this.pendingAnswer !== null && this.panel === null,
+      isActive: () => this.card !== null && this.pendingAnswer !== null &&
+        this.panel === null && !this.isGamePaused(),
       getObjects: () => this.card.clickableMeshes,
       onHover: (hit) => { if (this.card) this.card.setHover(hit && this.panel === null ? this.answerIndexOf(hit) : null); },
       onClick: (hit) => this.submit(this.answerIndexOf(hit))
@@ -187,7 +193,7 @@ export class EventManager {
     this.card = card;
     this.activeEvent = { type: 'quiz', question };
     card.showQuestion(question);
-    this.scene.add(card.group);
+    this.addEventCard(card);
 
     const pile = this.board.piles.find((p) => p.key === 'quiz');
     await this.playEntry(card, pile);
@@ -199,7 +205,7 @@ export class EventManager {
     await this.animations.wait(FEEDBACK_SECONDS);
 
     await this.playExit(card, pile);
-    card.dispose();
+    this.disposeEventCard(card);
     this.card = null;
     this.activeEvent = null;
     return { success: correct };
@@ -233,7 +239,7 @@ export class EventManager {
 
     const game = this.prepareGame(card, chosen, level);
     this.activeEvent = { type: 'challenge', kind: chosen, step: 0, ...game.data };
-    this.scene.add(card.group);
+    this.addEventCard(card);
 
     const pile = this.board.piles.find((p) => p.key === 'defi');
     await this.playEntry(card, pile);
@@ -244,7 +250,7 @@ export class EventManager {
     await this.animations.wait(FEEDBACK_SECONDS);
 
     await this.playExit(card, pile);
-    card.dispose();
+    this.disposeEventCard(card);
     this.card = null;
     this.activeEvent = null;
     return { kind: chosen, success: result.success };
@@ -407,7 +413,7 @@ export class EventManager {
     this.card = card;
     this.activeEvent = { type: 'bonus' };
     card.showChest();
-    this.scene.add(card.group);
+    this.addEventCard(card);
 
     const pile = this.board.piles.find((p) => p.key === 'bonus');
     await this.playEntry(card, pile);
@@ -421,13 +427,14 @@ export class EventManager {
 
     if (outcome.type === 'double') {
       await this.parkPendingCard(card, pile, playerState, 'double');
+      this.clearEventCardOffset(card);
       this.card = null;
       this.activeEvent = null;
       return outcome;
     }
 
     await this.playExit(card, pile);
-    card.dispose();
+    this.disposeEventCard(card);
     this.card = null;
     this.activeEvent = null;
     return outcome;
@@ -448,7 +455,7 @@ export class EventManager {
     this.card = card;
     this.activeEvent = { type: 'trap' };
     card.showSign();
-    this.scene.add(card.group);
+    this.addEventCard(card);
 
     const pile = this.board.piles.find((p) => p.key === 'piege');
     await this.playEntry(card, pile);
@@ -462,13 +469,14 @@ export class EventManager {
 
     if (outcome.type === 'skip' || outcome.type === 'slow') {
       await this.parkPendingCard(card, pile, playerState, outcome.type);
+      this.clearEventCardOffset(card);
       this.card = null;
       this.activeEvent = null;
       return outcome;
     }
 
     await this.playExit(card, pile);
-    card.dispose();
+    this.disposeEventCard(card);
     this.card = null;
     this.activeEvent = null;
     return outcome;
@@ -644,6 +652,7 @@ export class EventManager {
 
   // Retour au menu principal : on ferme tout ce qui est ouvert, sans rien résoudre
   abort() {
+    this.clearEventCardOffset();
     if (this.card) {
       this.card.dispose();
       this.card = null;
@@ -660,6 +669,8 @@ export class EventManager {
     this.rulesCard = null;
     this.rulesCardAtHome = false;
     this.activeEvent = null;
+    this.pauseOverlay = null;
+    this.rulesOverlay = null;
     this.pendingAnswer = null;
     this.pendingChoice = null;
     for (const pile of this.board.piles) pile.topCard.show();
@@ -880,9 +891,56 @@ export class EventManager {
     this.rulesCard?.setHover(null, this.animations);
   }
 
-  async openMenuCard(card, rulesCard = null) {
+  getEventCardOffsetGroup(card) {
+    if (this.eventCardOffset && this.eventCardOffset.card === card) {
+      return this.eventCardOffset.group;
+    }
+    const group = new THREE.Group();
+    this.scene.add(group);
+    group.add(card.group);
+    this.eventCardOffset = { card, group };
+    return group;
+  }
+
+  addEventCard(card) {
+    this.getEventCardOffsetGroup(card);
+  }
+
+  disposeEventCard(card) {
+    this.clearEventCardOffset(card);
+    card.dispose();
+  }
+
+  animateEventCardOffset(card, target, duration) {
+    const group = this.getEventCardOffsetGroup(card);
+    const start = group.position.clone();
+    return this.animations.animate(duration, (eased) => {
+      group.position.lerpVectors(start, target, eased);
+    }, easeInOutQuad, { ui: true });
+  }
+
+  clearEventCardOffset(card = null) {
+    if (!this.eventCardOffset || (card && this.eventCardOffset.card !== card)) return;
+    const { card: eventCard, group } = this.eventCardOffset;
+    group.remove(eventCard.group);
+    this.scene.add(eventCard.group);
+    this.scene.remove(group);
+    this.eventCardOffset = null;
+  }
+
+  async openMenuCard(card, rulesCard = null, alongsideCard = null) {
     this.cameraManager.setLocked(true);
     this.menuCard = card;
+    this.pauseOverlay = alongsideCard
+      ? {
+          card: alongsideCard,
+          originalPose: {
+            position: alongsideCard.group.position.clone(),
+            quaternion: alongsideCard.group.quaternion.clone(),
+            scale: alongsideCard.group.scale.x
+          }
+        }
+      : null;
     if (rulesCard) {
       this.rulesCard = rulesCard;
       const rulesHome = this.computeRulesHomePose();
@@ -899,7 +957,9 @@ export class EventManager {
       this.rulesCardAtHome = true;
     }
     this.panel = card;
-    const target = this.computeDisplay();
+    const target = this.pauseOverlay
+      ? this.computePauseOverlayPose()
+      : this.computeDisplay();
     const home = this.computeMenuHomePose();
     card.group.position.copy(home.position);
     card.group.quaternion.copy(home.quaternion);
@@ -912,8 +972,51 @@ export class EventManager {
     if (card.backContent) card.backContent.visible = false;
     this.scene.add(card.group);
     this.menuAtHome = false;
-    await this.animateCardFromRest(card, home, target);
+    const animations = [this.animateCardFromRest(card, home, target)];
+    if (this.pauseOverlay) {
+      const underlying = this.pauseOverlay.card;
+      animations.push(this.animateEventCardOffset(
+        underlying,
+        this.pauseOverlay.shiftedPose.position.clone()
+          .sub(this.pauseOverlay.originalPose.position),
+        0.5
+      ));
+    }
+    await Promise.all(animations);
     await this.flipMenuCard(card, 0, 1);
+  }
+
+  computePauseOverlayPose() {
+    const originalPose = this.pauseOverlay.originalPose;
+    const position = originalPose.position;
+    const scale = originalPose.scale;
+    const camera = this.cameraManager.camera;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const centerOffset = (CARD_SIZE.width * scale + PAUSE_CARD_GAP) / 2;
+    const shiftedPose = {
+      position: position.clone().addScaledVector(right, centerOffset),
+      quaternion: originalPose.quaternion.clone(),
+      scale
+    };
+    const overlayPosition = position.clone().addScaledVector(right, -centerOffset);
+    this.pauseOverlay.shiftedPose = shiftedPose;
+    const pose = {
+      position: overlayPosition,
+      quaternion: originalPose.quaternion.clone(),
+      scale
+    };
+
+    return pose;
+  }
+
+  offsetScreenPose(pose, distance) {
+    const right = new THREE.Vector3(1, 0, 0)
+      .applyQuaternion(this.cameraManager.camera.quaternion);
+    return {
+      position: pose.position.clone().addScaledVector(right, distance),
+      quaternion: pose.quaternion.clone(),
+      scale: pose.scale
+    };
   }
 
   async flipMenuCard(card, from, to) {
@@ -1023,27 +1126,54 @@ export class EventManager {
     });
   }
 
-  async closeMenuCard(card, rulesCard = null) {
+  async closeMenuCard(card, rulesCard = null, { parallelOverlayReturn = false } = {}) {
     this.clearMenuHover();
     this.pairActive = false;
+    const pauseOverlay = this.pauseOverlay;
+    const returnTogether = parallelOverlayReturn && pauseOverlay;
+    const multiCardReturnDuration = 1.6;
     const animations = [
-      (async () => {
-        await this.flipMenuCard(card, 1, 0);
-        await this.animateCardToRest(card, this.computeMenuHomePose());
-      })()
+      returnTogether
+        ? this.animateCardToRest(card, this.computeMenuHomePose(), multiCardReturnDuration)
+        : (async () => {
+            await this.flipMenuCard(card, 1, 0);
+            await this.animateCardToRest(card, this.computeMenuHomePose());
+          })()
     ];
     if (rulesCard && !this.rulesCardAtHome) {
-      animations.push((async () => {
-        await this.flipMenuCard(rulesCard, 1, 0);
-        await this.animateCardToRest(rulesCard, this.computeRulesHomePose());
-      })());
+      animations.push(returnTogether
+        ? this.animateCardToRest(rulesCard, this.computeRulesHomePose(), multiCardReturnDuration)
+        : (async () => {
+            await this.flipMenuCard(rulesCard, 1, 0);
+            await this.animateCardToRest(rulesCard, this.computeRulesHomePose());
+          })());
+    }
+    if (returnTogether) {
+      const underlying = pauseOverlay.card;
+      const event = this.activeEvent;
+      const pileKey = event && ({
+        quiz: 'quiz',
+        challenge: 'defi',
+        bonus: 'bonus',
+        trap: 'piege'
+      })[event.type];
+      const pile = pileKey && this.board.piles.find((candidate) => candidate.key === pileKey);
+      if (!pile) throw new Error(`Impossible de retrouver la pile de l'événement ${event?.type ?? 'actif'}`);
+      animations.push(this.playExit(underlying, pile, { ui: true, duration: multiCardReturnDuration }));
+      animations.push(this.animateEventCardOffset(underlying, new THREE.Vector3(), multiCardReturnDuration));
     }
     await Promise.all(animations);
+    if (pauseOverlay && !returnTogether) {
+      const underlying = pauseOverlay.card;
+      await this.animateEventCardOffset(underlying, new THREE.Vector3(), 0.5);
+    }
+    if (pauseOverlay) this.clearEventCardOffset();
     this.menuAtHome = true;
     this.rulesCardAtHome = Boolean(rulesCard);
     this.pairActive = false;
     this.panel = null;
     this.pendingChoice = null;
+    this.pauseOverlay = null;
     this.cameraManager.setLocked(false);
   }
 
@@ -1116,7 +1246,20 @@ export class EventManager {
     this.clearMenuHover();
     this.pendingChoice = null;
     const home = this.computeRulesHomePose();
-    const target = this.computeDisplay();
+    const eventCard = this.card && this.activeEvent ? this.card : null;
+    let target = this.computeDisplay();
+    this.rulesOverlay = null;
+    if (eventCard) {
+      const originalPose = {
+        position: eventCard.group.position.clone(),
+        quaternion: eventCard.group.quaternion.clone(),
+        scale: eventCard.group.scale.x
+      };
+      const centerOffset = (CARD_SIZE.width * originalPose.scale + PAUSE_CARD_GAP) / 2;
+      const gamePose = this.offsetScreenPose(originalPose, -centerOffset);
+      target = this.offsetScreenPose(originalPose, centerOffset);
+      this.rulesOverlay = { type: 'event', card: eventCard, originalPose, gamePose };
+    }
     rulesCard.group.position.copy(home.position);
     rulesCard.group.quaternion.copy(home.quaternion);
     rulesCard.group.scale.setScalar(home.scale);
@@ -1129,7 +1272,17 @@ export class EventManager {
     if (rulesCard.group.parent !== this.scene) this.scene.add(rulesCard.group);
     this.rulesCardAtHome = false;
     this.panel = rulesCard;
-    await this.animateCardFromRest(rulesCard, home, target);
+    const animations = [this.animateCardFromRest(rulesCard, home, target)];
+    if (this.rulesOverlay) {
+      animations.push(this.animateEventCardOffset(
+        this.rulesOverlay.card,
+        this.rulesOverlay.gamePose.position
+          .clone()
+          .sub(this.rulesOverlay.originalPose.position),
+        0.5
+      ));
+    }
+    await Promise.all(animations);
     await this.flipMenuCard(rulesCard, 0, 1);
   }
 
@@ -1137,9 +1290,14 @@ export class EventManager {
     this.clearMenuHover();
     await this.flipMenuCard(rulesCard, 1, 0);
     await this.animateCardToRest(rulesCard, this.computeRulesHomePose());
+    if (this.rulesOverlay && this.rulesOverlay.type === 'event') {
+      await this.animateEventCardOffset(this.rulesOverlay.card, new THREE.Vector3(), 0.5);
+    }
     this.rulesCardAtHome = true;
     this.panel = null;
     this.pendingChoice = null;
+    this.rulesOverlay = null;
+    if (this.eventCardOffset) this.clearEventCardOffset();
     this.cameraManager.setLocked(false);
   }
 
@@ -1183,6 +1341,64 @@ export class EventManager {
     rulesCard.setFlip(0);
     if (rulesCard.group.parent !== this.scene) this.scene.add(rulesCard.group);
 
+    if (this.pauseOverlay) {
+      const eventCard = this.pauseOverlay.card;
+      const menuFrom = {
+        position: menuCard.group.position.clone(),
+        quaternion: menuCard.group.quaternion.clone(),
+        scale: menuCard.group.scale.x
+      };
+      const originalPose = this.pauseOverlay.originalPose;
+      const camera = this.cameraManager.camera;
+      const distance = camera.position.distanceTo(originalPose.position);
+      const visibleHeight = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const visibleWidth = visibleHeight * camera.aspect;
+      const eventWidth = this.getCardHomeMetrics(eventCard).width * originalPose.scale;
+      const sideWidth = Math.max(
+        this.getCardHomeMetrics(menuCard).width,
+        this.getCardHomeMetrics(rulesCard).width
+      );
+      const availableSideWidth = Math.max(
+        0.01 * sideWidth,
+        (visibleWidth - eventWidth - 2 * PAUSE_CARD_GAP - visibleWidth * 0.1) / 2
+      );
+      const sideScale = Math.min(
+        menuFrom.scale,
+        this.computeDisplay().scale,
+        availableSideWidth / sideWidth
+      );
+      const centerOffset = eventWidth / 2 + PAUSE_CARD_GAP + sideWidth * sideScale / 2;
+      const trioShift = Math.min(PAUSE_CARD_GAP * 2, visibleWidth * 0.035);
+      const eventPose = this.offsetScreenPose(originalPose, trioShift);
+      const menuLeft = this.offsetScreenPose(originalPose, -centerOffset + trioShift);
+      menuLeft.scale = sideScale;
+      const rulesRight = this.offsetScreenPose(originalPose, centerOffset + trioShift);
+      rulesRight.scale = sideScale;
+      this.rulesOverlay = {
+        type: 'pause',
+        eventCard,
+        eventOffsetFrom: this.getEventCardOffsetGroup(eventCard).position.clone(),
+        eventOffset: eventPose.position.clone().sub(originalPose.position),
+        menuFrom,
+        menuCard,
+        menuPose: menuLeft
+      };
+
+      menuCard.flat.rotation.x = 0;
+      menuCard.setFlip(1);
+      menuCard.content.visible = false;
+      menuCard.backContent.visible = true;
+      menuCard.restLogo.visible = false;
+      await Promise.all([
+        this.animateCardPose(menuCard, menuFrom, menuLeft, 0.9, true),
+        this.animateEventCardOffset(eventCard, this.rulesOverlay.eventOffset, 0.9),
+        this.animateCardFromRest(rulesCard, rulesHome, rulesRight, 0.9)
+      ]);
+      await this.flipMenuCard(rulesCard, 0, 1);
+      this.pairActive = true;
+      return;
+    }
+
     const boardRight = new THREE.Vector3(1, 0, 0)
       .applyQuaternion(this.board.group.getWorldQuaternion(new THREE.Quaternion()));
     const cameraRight = new THREE.Vector3(1, 0, 0)
@@ -1212,6 +1428,21 @@ export class EventManager {
     this.clearMenuHover();
     this.pairActive = false;
     const rulesHome = this.computeRulesHomePose();
+    if (this.rulesOverlay && this.rulesOverlay.type === 'pause') {
+      const { eventCard, eventOffsetFrom, menuFrom, menuPose } = this.rulesOverlay;
+      await this.animateCardToRest(rulesCard, rulesHome, 0.9);
+      await Promise.all([
+        this.animateCardPose(menuCard, menuPose, menuFrom, 0.5, true),
+        this.animateEventCardOffset(eventCard, eventOffsetFrom, 0.5)
+      ]);
+      this.menuAtHome = false;
+      this.rulesCardAtHome = true;
+      this.panel = menuCard;
+      this.pendingChoice = null;
+      this.rulesOverlay = null;
+      return;
+    }
+
     const menuFrom = {
       position: menuCard.group.position.clone(),
       quaternion: menuCard.group.quaternion.clone(),
@@ -1244,7 +1475,7 @@ export class EventManager {
       card.group.position.lerpVectors(start.position, lifted, eased);
       wobble.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(Math.PI * t) * 0.2);
       card.group.quaternion.copy(wobble).multiply(start.quaternion);
-    }, easeOutCubic);
+    }, easeOutCubic, { ui: true });
 
     // 2) Vol vers la caméra : la carte se redresse et grandit
     const target = this.computeDisplay();
@@ -1252,17 +1483,17 @@ export class EventManager {
       card.group.position.lerpVectors(lifted, target.position, eased);
       card.group.quaternion.slerpQuaternions(start.quaternion, target.quaternion, eased);
       card.group.scale.setScalar(THREE.MathUtils.lerp(1, target.scale, easeOutBack(t)));
-    }, easeInOutQuad);
+    }, easeInOutQuad, { ui: true });
 
     // 3) Retournement : la carte pivote de 180° et révèle le contenu
-    await this.playFlip(card, target.position, target.scale, 0, 1);
+    await this.playFlip(card, target.position, target.scale, 0, 1, true);
   }
 
   // Retournement de la carte devant la caméra (de `from` à `to` : 0 = recto, 1 = verso).
   // Pendant le demi-tour, la carte s'avance un peu vers la caméra et grossit légèrement.
-  playFlip(card, basePosition, baseScale, from, to, ui = false) {
+  playFlip(card, basePosition, baseScale, from, to, ui = false, duration = 0.9) {
     const toCamera = this.cameraManager.camera.position.clone().sub(basePosition).normalize();
-    return this.animations.animate(0.9, (eased, t) => {
+    return this.animations.animate(duration, (eased, t) => {
       const bump = Math.sin(Math.PI * t);
       card.setFlip(THREE.MathUtils.lerp(from, to, eased));
       card.group.position.copy(basePosition).addScaledVector(toCamera, bump * 1.2);
@@ -1271,8 +1502,11 @@ export class EventManager {
   }
 
   // Fermeture en sens inverse : la carte se retourne sur le "?", revient au-dessus de la pile puis s'y repose
-  async playExit(card, pile) {
-    await this.playFlip(card, card.group.position.clone(), card.group.scale.x, 1, 0);
+  async playExit(card, pile, { ui = false, duration = null } = {}) {
+    const flipDuration = duration === null ? 0.9 : duration * 0.45;
+    const flightDuration = duration === null ? 0.7 : duration * 0.35;
+    const landingDuration = duration === null ? 0.4 : duration * 0.2;
+    await this.playFlip(card, card.group.position.clone(), card.group.scale.x, 1, 0, ui, flipDuration);
 
     const from = {
       position: card.group.position.clone(),
@@ -1282,18 +1516,18 @@ export class EventManager {
     const up = new THREE.Vector3(0, LIFT_HEIGHT, 0);
 
     // Retour au-dessus de la pile (on suit la carte du dessus, qui flotte)
-    await this.animations.animate(0.7, (eased) => {
+    await this.animations.animate(flightDuration, (eased) => {
       const top = this.topPose(pile);
       card.group.position.lerpVectors(from.position, top.position.add(up), eased);
       card.group.quaternion.slerpQuaternions(from.quaternion, top.quaternion, eased);
       card.group.scale.setScalar(THREE.MathUtils.lerp(from.scale, 1, eased));
-    }, easeInOutQuad);
+    }, easeInOutQuad, { ui });
 
     // Descente : la carte se repose sur la pile
-    await this.animations.animate(0.4, (eased) => {
+    await this.animations.animate(landingDuration, (eased) => {
       const top = this.topPose(pile);
       card.group.position.lerpVectors(top.position.clone().add(up), top.position, eased);
-    }, easeInOutQuad);
+    }, easeInOutQuad, { ui });
 
     pile.topCard.show();
   }

@@ -24,6 +24,7 @@ export class Game {
     this.sceneManager = new SceneManager(container);
     this.cameraManager = new CameraManager(this.sceneManager.renderer.domElement, this.getAspect());
     this.clock = new THREE.Clock();
+    this.simulationTime = 0;
 
     this.board = new Board();
     this.environment = new Environment();
@@ -70,7 +71,8 @@ export class Game {
       input: this.input,
       board: this.board,
       rules: this.rules,
-      questions: this.questions
+      questions: this.questions,
+      isGamePaused: () => this.paused
     });
 
     this.menu = new Menu3D(this.events);
@@ -159,7 +161,15 @@ export class Game {
     this.state.phase = PHASE.PAUSED; // le dé et les cartes sont bloqués
     this.animations.paused = true;   // les animations de jeu sont gelées
 
-    const choice = await this.menu.showPause();
+    let choice;
+    try {
+      choice = await this.menu.showPause();
+    } catch (error) {
+      this.state.phase = this.phaseBeforePause;
+      this.paused = false;
+      this.animations.paused = false;
+      throw error;
+    }
 
     this.paused = false;
     this.animations.paused = false;
@@ -375,16 +385,20 @@ export class Game {
 
   loop() {
     requestAnimationFrame(this.loop);
-    const deltaTime = Math.min(this.clock.getDelta(), 0.1);
-    this.update(deltaTime, this.clock.elapsedTime);
+    const realDelta = Math.min(this.clock.getDelta(), 0.1);
+    const deltaTime = this.paused ? 0 : realDelta;
+    this.simulationTime += deltaTime;
+    this.update(realDelta, deltaTime, this.simulationTime);
     this.sceneManager.render(this.cameraManager.camera);
   }
 
   // Un seul update() principal : toute l'animation passe par ici
-  update(deltaTime, time) {
-    this.animations.update(deltaTime);
+  update(realDelta, deltaTime, time) {
+    // L'AnimationManager laisse avancer les animations d'interface, mais conserve les
+    // tâches de jeu à leur temps écoulé lorsqu'il est en pause.
+    this.animations.update(realDelta);
     const panel = this.events && this.events.panel;
-    if (panel && panel.update) panel.update(time); // éléments animés des menus
+    if (panel && panel.update) panel.update(this.clock.elapsedTime); // éléments animés des menus
     this.board.update(deltaTime, time);
     this.dice.update(deltaTime, time);
     for (const player of this.players) player.update(time, deltaTime);

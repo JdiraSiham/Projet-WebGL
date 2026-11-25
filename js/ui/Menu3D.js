@@ -10,7 +10,11 @@ export class Menu3D {
 
   async chooseOnCard(mode, title = null) {
     this.card.configure(mode, true, title);
-    await this.events.openMenuCard(this.card, this.rulesCard);
+    await this.events.openMenuCard(
+      this.card,
+      this.rulesCard,
+      mode === 'pause' ? this.events.card : null
+    );
 
     menuLoop: for (;;) {
       let index = await this.events.waitChoice();
@@ -35,7 +39,9 @@ export class Menu3D {
         }
       }
 
-      await this.events.closeMenuCard(this.card, this.rulesCard);
+      await this.events.closeMenuCard(this.card, this.rulesCard, {
+        parallelOverlayReturn: mode === 'pause' && index !== 0
+      });
       if (mode === 'main') return index === 1 ? 'duo' : 'solo';
       if (index === 0) return 'resume';
       return index === 2 ? 'duo' : 'solo';
